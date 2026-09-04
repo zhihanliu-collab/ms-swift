@@ -21,10 +21,12 @@ def normalize_openai_tool_calls(messages: Messages) -> Messages:
             continue
 
         content = message.get('content')
-        if content:
+        reasoning_content = message.get('reasoning_content')
+        if content or reasoning_content is not None:
             normalized.append({
                 key: value
-                for key, value in message.items() if key in {'role', 'content', 'loss', 'loss_scale'}
+                for key, value in message.items()
+                if key in {'role', 'content', 'reasoning_content', 'loss', 'loss_scale'}
             })
         for tool_call in tool_calls:
             # no function field, back to tool_call

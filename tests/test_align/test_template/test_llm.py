@@ -759,6 +759,46 @@ def test_qwen3_8():
     jinja_response = _infer_model(engine, messages=messages)
     assert swift_response == jinja_response
 
+    # OpenAI responses expose Qwen3.8 thinking separately from content.  A
+    # tool-calling assistant turn must render identically in training and
+    # inference regardless of whether swift or the official Jinja backend is
+    # selected; historically normalize_openai_tool_calls dropped this field.
+    tool_messages = [{
+        'role': 'user',
+        'content': 'What is the weather in Hangzhou?'
+    }, {
+        'role': 'assistant',
+        'reasoning_content': 'I should query the weather tool.',
+        'content': '',
+        'tool_calls': [{
+            'id': 'call_0',
+            'type': 'function',
+            'function': {
+                'name': 'get_weather',
+                'arguments': {'city': 'Hangzhou'}
+            }
+        }]
+    }, {
+        'role': 'tool',
+        'tool_call_id': 'call_0',
+        'content': 'sunny'
+    }, {
+        'role': 'assistant',
+        'reasoning_content': 'I can answer now.',
+        'content': 'It is sunny.'
+    }]
+    data = {'messages': tool_messages}
+    template.set_mode('train')
+    template.template_backend = 'swift'
+    swift_encoded = template.encode(data)
+    template.template_backend = 'jinja'
+    jinja_encoded = template.encode(data)
+    assert swift_encoded['input_ids'] == jinja_encoded['input_ids']
+    assert swift_encoded['labels'] == jinja_encoded['labels']
+    decoded = template.safe_decode(swift_encoded['input_ids'])
+    assert 'I should query the weather tool.' in decoded
+    assert '<function=get_weather>' in decoded
+
 
 def test_qwen3_8_reasoning_effort():
     engine = TransformersEngine('Qwen/Qwen3.8-27B')

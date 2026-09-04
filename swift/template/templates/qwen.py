@@ -675,6 +675,27 @@ class Qwen3_8Template(Qwen3_5Template):
             return f'{reasoning_instructions}\n\n{system}'
         return reasoning_instructions
 
+    def _swift_prepare_inputs(self, inputs: StdTemplateInputs):
+        # Qwen3.8's public message schema may keep chain-of-thought in a
+        # separate ``reasoning_content`` field.  The swift backend serializes
+        # assistant text from ``content``, so fold the field into the native
+        # Qwen wire before Qwen3_5Template performs whitespace normalization.
+        # This is especially important for assistant turns with ``tool_calls``:
+        # normalize_openai_tool_calls splits those calls into canonical roles,
+        # and silently dropping reasoning here makes train and inference
+        # prompts disagree with the HF/Jinja backend.
+        for message in inputs.messages:
+            if message.get('role') != 'assistant' or message.get('reasoning_content') is None:
+                continue
+            reasoning_content = str(message['reasoning_content'])
+            content = message.get('content')
+            if content is None:
+                content = ''
+            if not isinstance(content, str):
+                raise TypeError('Qwen3.8 assistant content must be a string when reasoning_content is provided.')
+            message['content'] = f'<think>\n{reasoning_content}\n</think>\n\n{content}'
+        super()._swift_prepare_inputs(inputs)
+
     def _jinja_encode(self, inputs: StdTemplateInputs):
         for message in inputs.messages:
             content = message.get('content')
