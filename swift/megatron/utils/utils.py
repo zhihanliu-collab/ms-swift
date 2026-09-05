@@ -81,6 +81,12 @@ def install_peft_sequence_parallel_bridge():
                         child.sequence_parallel = enabled
                 if states:
                     saved[name] = states
+            if os.getenv('SWIFT_DEBUG_GDN_SHAPES') == '1' and dist.get_rank() == 0:
+                values = {
+                    name: [(child.__class__.__name__, child.sequence_parallel) for child, _ in states]
+                    for name, states in saved.items()
+                }
+                print(f'[swift-gdn-debug] rank=0 set_sp={enabled} values={values}', flush=True)
             return saved
 
         def restore_gdn_linear_sequence_parallel(module, saved):
@@ -105,9 +111,16 @@ def install_peft_sequence_parallel_bridge():
                     packed = args[4]
                 cu = getattr(packed, 'cu_seqlens_q', None)
                 cu_summary = None if cu is None else (tuple(cu.shape), int(cu[0]), int(cu[-1]))
+                projection_states = {}
+                for name in ('in_proj', 'out_proj'):
+                    projection = getattr(module, name, None)
+                    projection_states[name] = [
+                        (child.__class__.__name__, getattr(child, 'sequence_parallel', None))
+                        for child in iter_parallel_children(projection)
+                    ]
                 print(
                     f'[swift-gdn-debug] rank={dist.get_rank()} input={tuple(hidden_states.shape)} '
-                    f'cu={cu_summary}',
+                    f'cu={cu_summary} projections={projection_states}',
                     flush=True)
                 return original_forward(module, hidden_states, *args, **kwargs)
 
