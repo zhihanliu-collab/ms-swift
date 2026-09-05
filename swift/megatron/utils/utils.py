@@ -30,6 +30,7 @@ def install_peft_sequence_parallel_bridge():
     attribute, causing the GDN output to be reduce-scattered twice.
     """
     from peft.tuners.lora.tp_layer import LoraParallelLinear
+    from mcore_bridge import LoraParallelLinear as MCoreLoraParallelLinear
 
     if getattr(LoraParallelLinear, '_swift_sequence_parallel_bridge', False):
         return
@@ -61,9 +62,9 @@ def install_peft_sequence_parallel_bridge():
     if not getattr(GatedDeltaNet, '_swift_peft_sequence_parallel_bridge', False):
 
         def iter_parallel_children(module):
-            if not isinstance(module, LoraParallelLinear):
+            if not isinstance(module, (LoraParallelLinear, MCoreLoraParallelLinear)):
                 return [module]
-            children = [module.get_base_layer()]
+            children = [module, module.get_base_layer()]
             for module_dict_name in ('lora_A', 'lora_B'):
                 module_dict = getattr(module, module_dict_name, None)
                 if module_dict is not None:
