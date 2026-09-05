@@ -20,6 +20,36 @@ from swift.utils import get_packed_seq_params as _get_packed_seq_params
 logger = get_logger()
 
 
+def install_peft_sequence_parallel_bridge():
+    """Let MCore toggle sequence parallelism through PEFT's TP wrapper.
+
+    Qwen3.8 GatedDeltaNet gathers the sequence dimension and temporarily
+    disables sequence parallelism on its projection layers.  PEFT wraps those
+    layers with its own ``LoraParallelLinear`` and otherwise hides the control
+    attribute, causing the GDN output to be reduce-scattered twice.
+    """
+    from peft.tuners.lora.tp_layer import LoraParallelLinear
+
+    if getattr(LoraParallelLinear, '_swift_sequence_parallel_bridge', False):
+        return
+
+    def get_sequence_parallel(module):
+        return module.get_base_layer().sequence_parallel
+
+    def set_sequence_parallel(module, enabled):
+        modules = [module.get_base_layer()]
+        for module_dict_name in ('lora_A', 'lora_B'):
+            module_dict = getattr(module, module_dict_name, None)
+            if module_dict is not None:
+                modules.extend(module_dict.values())
+        for child in modules:
+            if hasattr(child, 'sequence_parallel'):
+                child.sequence_parallel = enabled
+
+    LoraParallelLinear.sequence_parallel = property(get_sequence_parallel, set_sequence_parallel)
+    LoraParallelLinear._swift_sequence_parallel_bridge = True
+
+
 def find_all_linears(model, extra_layers=None):
 
     def _cond(name, module):
@@ -137,6 +167,7 @@ def get_modules_to_save(args, model):
 
 
 def prepare_adapter(args, model):
+    install_peft_sequence_parallel_bridge()
     target_modules = get_target_modules(args, model)
     modules_to_save = get_modules_to_save(args, model)
     lora_kwargs = {
