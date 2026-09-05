@@ -707,6 +707,8 @@ class Qwen3_8Template(Qwen3_5Template):
         # headers while coalescing the tool result and interrupt into one
         # masked query context.  No source content or supervised target is
         # changed.
+        if self.template_backend != 'swift':
+            return
         messages = inputs.messages
         i = 1
         assistant_header = '<|im_start|>assistant\n'
