@@ -1,4 +1,5 @@
 # Copyright (c) ModelScope Contributors. All rights reserved.
+import os
 import re
 import torch
 import torch.distributed as dist
@@ -48,6 +49,35 @@ def install_peft_sequence_parallel_bridge():
 
     LoraParallelLinear.sequence_parallel = property(get_sequence_parallel, set_sequence_parallel)
     LoraParallelLinear._swift_sequence_parallel_bridge = True
+
+    if os.getenv('SWIFT_DEBUG_GDN_SHAPES') == '1':
+        from mcore_bridge.model.modules import gated_delta_net as gdn_module
+
+        if not getattr(gdn_module.GatedDeltaNet, '_swift_debug_shapes', False):
+            original_forward = gdn_module.GatedDeltaNet.forward
+            original_scatter = gdn_module.scatter_to_sequence_parallel_region
+
+            def debug_forward(module, hidden_states, *args, **kwargs):
+                packed = kwargs.get('packed_seq_params')
+                if packed is None and len(args) >= 5:
+                    packed = args[4]
+                cu = getattr(packed, 'cu_seqlens_q', None)
+                cu_summary = None if cu is None else (tuple(cu.shape), int(cu[0]), int(cu[-1]))
+                print(
+                    f'[swift-gdn-debug] rank={dist.get_rank()} input={tuple(hidden_states.shape)} '
+                    f'cu={cu_summary}',
+                    flush=True)
+                return original_forward(module, hidden_states, *args, **kwargs)
+
+            def debug_scatter(input_, *args, **kwargs):
+                print(
+                    f'[swift-gdn-debug] rank={dist.get_rank()} pre_scatter={tuple(input_.shape)}',
+                    flush=True)
+                return original_scatter(input_, *args, **kwargs)
+
+            gdn_module.GatedDeltaNet.forward = debug_forward
+            gdn_module.GatedDeltaNet._swift_debug_shapes = True
+            gdn_module.scatter_to_sequence_parallel_region = debug_scatter
 
 
 def find_all_linears(model, extra_layers=None):
