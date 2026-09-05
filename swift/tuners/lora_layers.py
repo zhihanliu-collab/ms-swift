@@ -225,6 +225,28 @@ class Conv2d(LoRAActivationMixin, _Conv2d):
 
 class LoraParallelLinear(LoRAActivationMixin, _LoraParallelLinear):
 
+    @property
+    def sequence_parallel(self):
+        """Expose the wrapped Megatron layer's sequence-parallel state.
+
+        Some MCore modules temporarily disable sequence parallelism on their
+        child linears after gathering the sequence dimension.  Keep that
+        protocol working after PEFT replaces the child with this wrapper, and
+        apply the same state to the parallel LoRA branch.
+        """
+        return self.get_base_layer().sequence_parallel
+
+    @sequence_parallel.setter
+    def sequence_parallel(self, enabled):
+        modules = [self.get_base_layer()]
+        for module_dict_name in ('lora_A', 'lora_B'):
+            module_dict = getattr(self, module_dict_name, None)
+            if module_dict is not None:
+                modules.extend(module_dict.values())
+        for module in modules:
+            if hasattr(module, 'sequence_parallel'):
+                module.sequence_parallel = enabled
+
     def __init__(self, *args, module_key: str, **kwargs):
         super(LoraParallelLinear, self).__init__(module_key)
         self.set_activation(args[1], True)
