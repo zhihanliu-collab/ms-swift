@@ -50,6 +50,48 @@ def install_peft_sequence_parallel_bridge():
     LoraParallelLinear.sequence_parallel = property(get_sequence_parallel, set_sequence_parallel)
     LoraParallelLinear._swift_sequence_parallel_bridge = True
 
+    # GatedDeltaNet temporarily gathers the sequence and disables SP on its
+    # projections.  Assigning through PEFT's wrapper is not sufficient at
+    # runtime because nn.Module's attribute handling can forward/retain the
+    # wrapper value without updating every parallel LoRA branch.  Patch the
+    # GDN toggler to operate on the concrete base/A/B modules and restore their
+    # individual states afterwards.
+    from mcore_bridge.model.modules.gated_delta_net import GatedDeltaNet
+
+    if not getattr(GatedDeltaNet, '_swift_peft_sequence_parallel_bridge', False):
+
+        def iter_parallel_children(module):
+            if not isinstance(module, LoraParallelLinear):
+                return [module]
+            children = [module.get_base_layer()]
+            for module_dict_name in ('lora_A', 'lora_B'):
+                module_dict = getattr(module, module_dict_name, None)
+                if module_dict is not None:
+                    children.extend(module_dict.values())
+            return children
+
+        def set_gdn_linear_sequence_parallel(module, enabled):
+            saved = {}
+            for name in ('in_proj', 'in_proj_qkvz', 'in_proj_ba', 'out_proj'):
+                projection = getattr(module, name, None)
+                states = []
+                for child in iter_parallel_children(projection):
+                    if hasattr(child, 'sequence_parallel'):
+                        states.append((child, child.sequence_parallel))
+                        child.sequence_parallel = enabled
+                if states:
+                    saved[name] = states
+            return saved
+
+        def restore_gdn_linear_sequence_parallel(module, saved):
+            for states in saved.values():
+                for child, enabled in states:
+                    child.sequence_parallel = enabled
+
+        GatedDeltaNet._set_linear_sequence_parallel = set_gdn_linear_sequence_parallel
+        GatedDeltaNet._restore_linear_sequence_parallel = restore_gdn_linear_sequence_parallel
+        GatedDeltaNet._swift_peft_sequence_parallel_bridge = True
+
     if os.getenv('SWIFT_DEBUG_GDN_SHAPES') == '1':
         from mcore_bridge.model.modules import gated_delta_net as gdn_module
 
