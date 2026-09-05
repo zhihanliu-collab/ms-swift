@@ -803,6 +803,53 @@ def test_qwen3_8():
     # comparing against Jinja's different label-construction policy.
     assert 'I should query the weather tool.' in template.safe_decode(swift_encoded['labels'])
 
+    # A user may interrupt immediately after a tool result (for example, an
+    # orchestration prompt asking a second model turn to summarize the trace).
+    # The official Jinja template renders two consecutive native user turns;
+    # Swift must preserve that wire while still masking both inputs.
+    interrupted = {'messages': [{
+        'role': 'user',
+        'content': 'Research the question.',
+        'loss': False,
+    }, {
+        'role': 'assistant',
+        'reasoning_content': 'I need one lookup.',
+        'content': '',
+        'tool_calls': [{
+            'id': 'interrupt-call',
+            'type': 'function',
+            'function': {'name': 'lookup', 'arguments': {'q': 'answer'}},
+        }],
+        'loss': True,
+    }, {
+        'role': 'tool',
+        'tool_call_id': 'interrupt-call',
+        'content': 'TOOL_INTERRUPT_MASK_31d9',
+        'loss': False,
+    }, {
+        'role': 'user',
+        'content': 'USER_INTERRUPT_MASK_82ae',
+        'loss': False,
+    }, {
+        'role': 'assistant',
+        'reasoning_content': 'FINAL_INTERRUPT_REASON_125f',
+        'content': 'FINAL_INTERRUPT_ANSWER_f344',
+        'loss': True,
+    }]}
+    template.template_backend = 'swift'
+    interrupted_swift = template.encode(interrupted)
+    template.template_backend = 'jinja'
+    interrupted_jinja = template.encode(interrupted)
+    assert interrupted_swift['input_ids'] == interrupted_jinja['input_ids']
+    interrupted_text = template.safe_decode(interrupted_swift['input_ids'])
+    assert '<|im_start|>user\n<tool_response>' in interrupted_text
+    assert '</tool_response><|im_end|>\n<|im_start|>user\nUSER_INTERRUPT_MASK_82ae' in interrupted_text
+    interrupted_labels = template.safe_decode(interrupted_swift['labels'])
+    assert 'TOOL_INTERRUPT_MASK_31d9' not in interrupted_labels
+    assert 'USER_INTERRUPT_MASK_82ae' not in interrupted_labels
+    assert 'FINAL_INTERRUPT_REASON_125f' in interrupted_labels
+    assert 'FINAL_INTERRUPT_ANSWER_f344' in interrupted_labels
+
     # Mixed reasoning representations otherwise silently produce two think
     # blocks. Fail closed so a malformed corpus cannot train the second block
     # as ordinary answer text.

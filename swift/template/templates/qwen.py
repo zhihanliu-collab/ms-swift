@@ -700,6 +700,38 @@ class Qwen3_8Template(Qwen3_5Template):
                 message['content'] = f'<think>\n{reasoning_content}\n</think>\n\n{content}'
         super()._swift_prepare_inputs(inputs)
 
+        # The official Qwen3.8 Jinja wire permits a user to interrupt after a
+        # tool result instead of requiring an assistant response first:
+        # assistant(tool_call) -> tool(result) -> user -> assistant.  Swift's
+        # encoder consumes query/assistant pairs, so retain the two native user
+        # headers while coalescing the tool result and interrupt into one
+        # masked query context.  No source content or supervised target is
+        # changed.
+        messages = inputs.messages
+        i = 1
+        assistant_header = '<|im_start|>assistant\n'
+        while i < len(messages):
+            tool_message, user_message = messages[i - 1], messages[i]
+            if tool_message['role'] != 'tool' or user_message['role'] != 'user':
+                i += 1
+                continue
+            tool_content = tool_message.get('content')
+            if not isinstance(tool_content, list) or not tool_content or not isinstance(tool_content[-1], str):
+                raise ValueError(f'Unexpected Qwen3.8 formatted tool context: {tool_content}')
+            if not tool_content[-1].endswith(assistant_header):
+                raise ValueError(f'Qwen3.8 tool context lacks assistant suffix: {tool_content}')
+            user_content = user_message.get('content')
+            if not isinstance(user_content, str):
+                raise ValueError('Qwen3.8 tool-result user interrupts currently require text-only user content.')
+            tool_content[-1] = tool_content[-1][:-len(assistant_header)]
+            tool_content.extend([
+                '<|im_start|>user\n',
+                user_content,
+                '<|im_end|>\n',
+                assistant_header,
+            ])
+            messages.pop(i)
+
     def _jinja_encode(self, inputs: StdTemplateInputs):
         for message in inputs.messages:
             content = message.get('content')
