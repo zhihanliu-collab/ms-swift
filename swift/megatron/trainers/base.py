@@ -24,6 +24,7 @@ from megatron.core.transformer.multi_token_prediction import MTPLossLoggingHelpe
 from modelscope import check_local_model_is_latest
 from packaging import version
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Callable, Dict, List, Optional
 
 from swift.dataset import RowPreprocessor
@@ -735,22 +736,36 @@ class BaseMegatronTrainer(ABC):
         config = self.config
         state = self.state
 
+        peak_tflops = args.mfu_peak_tflops_per_gpu
+        if peak_tflops and not hasattr(self, '_mfu_args'):
+            # Swift owns its arguments/config; Megatron's CLI global args are
+            # deliberately not initialized by this backend.
+            from megatron.training.training import num_floating_point_operations
+            values = {**vars(args), **vars(config)}
+            values.update(
+                seq_length=args.max_length,
+                num_experts=config.num_moe_experts,
+                group_query_attention=config.num_query_groups != config.num_attention_heads,
+                swiglu=config.gated_linear_unit,
+            )
+            self._mfu_args = SimpleNamespace(**values)
+            # Validate the accounting configuration before expensive compute.
+            num_floating_point_operations(self._mfu_args, args.global_batch_size)
+
         self.call_event('on_step_begin')
         maybe_finalize_async_save(args, blocking=False)
         step_started_at = time.perf_counter()
         metrics, grad_norm, update_successful = self.train_step(train_data_iterator)
         step_time = time.perf_counter() - step_started_at
 
-        peak_tflops = args.mfu_peak_tflops_per_gpu
         if peak_tflops:
-            from megatron.training import get_args as get_megatron_args
             from megatron.training.training import (
                 consume_seqlen_stats_in_iteration,
                 num_floating_point_operations,
             )
             total_real_tokens, seqlen_squared_sum = consume_seqlen_stats_in_iteration()
             model_flops = num_floating_point_operations(
-                get_megatron_args(),
+                self._mfu_args,
                 args.global_batch_size,
                 seqlen_squared_sum_in_batch=seqlen_squared_sum,
                 total_real_tokens_in_batch=total_real_tokens,
