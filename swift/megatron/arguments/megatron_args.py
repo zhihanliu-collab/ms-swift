@@ -626,6 +626,9 @@ class MegatronArguments(RLHFMegatronArgumentsMixin, MegatronTunerMixin):
     # 'wandb', 'swanlab', 'tensorboard'
     report_to: List[str] = field(default_factory=lambda: ['tensorboard'])
     logging_steps: int = 5
+    # Dense BF16 Tensor Core peak per GPU, used as the denominator for MFU.
+    # Leave unset to disable MFU accounting.
+    mfu_peak_tflops_per_gpu: Optional[float] = None
     tensorboard_dir: Optional[str] = None
     tensorboard_queue_size: int = 50
     wandb_project: str = 'megatron-swift'

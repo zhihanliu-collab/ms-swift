@@ -5,6 +5,7 @@ import torch.nn
 from collections import defaultdict
 from functools import partial
 from megatron.core import mpu
+from megatron.training.training import update_seqlen_stats_from_cu_seqlens
 from torch.distributed.nn import all_reduce
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 from typing import List, Optional
@@ -121,6 +122,10 @@ class MegatronTrainer(BaseMegatronTrainer):
             data.pop('labels', None)
         output_tensor = model(**data)
         packed_seq_params = data.get('packed_seq_params')
+        if packed_seq_params is not None and model.training:
+            num_samples = packed_seq_params.seq_lens.shape[0]
+            update_seqlen_stats_from_cu_seqlens(
+                packed_seq_params.cu_seqlens_q[:num_samples + 1])
         if self.args.task_type == 'seq_cls':
             loss_func = partial(
                 self.seq_cls_loss_func,

@@ -5,6 +5,7 @@ import megatron.core
 import operator
 import os
 import shutil
+import time
 import torch
 import torch.nn
 from abc import ABC, abstractmethod
@@ -134,6 +135,11 @@ class BaseMegatronTrainer(ABC):
 
     def on_log(self, logs, prefix=''):
         n_steps = logs.pop('n_steps')
+        if self.args.train_iters:
+            logs['epoch'] = (
+                self.state.iteration / self.args.train_iters
+                * (self.args.num_train_epochs or 1)
+            )
         self._log_callback(logs, n_steps)
         if prefix:
             logs = {f'{prefix}{k}': v for k, v in logs.items()}
@@ -731,7 +737,28 @@ class BaseMegatronTrainer(ABC):
 
         self.call_event('on_step_begin')
         maybe_finalize_async_save(args, blocking=False)
+        step_started_at = time.perf_counter()
         metrics, grad_norm, update_successful = self.train_step(train_data_iterator)
+        step_time = time.perf_counter() - step_started_at
+
+        peak_tflops = args.mfu_peak_tflops_per_gpu
+        if peak_tflops:
+            from megatron.training import get_args as get_megatron_args
+            from megatron.training.training import (
+                consume_seqlen_stats_in_iteration,
+                num_floating_point_operations,
+            )
+            total_real_tokens, seqlen_squared_sum = consume_seqlen_stats_in_iteration()
+            model_flops = num_floating_point_operations(
+                get_megatron_args(),
+                args.global_batch_size,
+                seqlen_squared_sum_in_batch=seqlen_squared_sum,
+                total_real_tokens_in_batch=total_real_tokens,
+            )
+            self._mfu_model_flops = getattr(self, '_mfu_model_flops', 0.0) + model_flops
+            self._mfu_step_time = getattr(self, '_mfu_step_time', 0.0) + step_time
+            self._mfu_real_tokens = getattr(self, '_mfu_real_tokens', 0.0) + (
+                total_real_tokens or args.global_batch_size * args.max_length)
 
         if state.iteration == self._start_iteration:
             if update_successful:
@@ -751,6 +778,18 @@ class BaseMegatronTrainer(ABC):
             self._train_metrics['learning_rate'] = learning_rate
         if state.should_log:
             state.should_log = False
+            if peak_tflops and self._mfu_step_time > 0:
+                world_size = torch.distributed.get_world_size()
+                achieved_tflops = self._mfu_model_flops / self._mfu_step_time / world_size / 1e12
+                mfu = achieved_tflops / peak_tflops
+                self._train_metrics['mfu'] = mfu
+                self._train_metrics['mfu_percent'] = 100 * mfu
+                self._train_metrics['model_tflops_per_gpu'] = achieved_tflops
+                self._train_metrics['tokens_per_second_per_gpu'] = (
+                    self._mfu_real_tokens / self._mfu_step_time / world_size)
+                self._mfu_model_flops = 0.0
+                self._mfu_step_time = 0.0
+                self._mfu_real_tokens = 0.0
             self.on_log(logs=self._train_metrics)
             self._train_metrics = {}
 
