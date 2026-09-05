@@ -1,5 +1,6 @@
 import json
 import os
+import pytest
 import torch
 
 os.environ['CUDA_VISIBLE_DEVICES'] = '0,1,2,3'
@@ -801,6 +802,18 @@ def test_qwen3_8():
     # reasoning remains in that backend's supervised target instead of
     # comparing against Jinja's different label-construction policy.
     assert 'I should query the weather tool.' in template.safe_decode(swift_encoded['labels'])
+
+    # Mixed reasoning representations otherwise silently produce two think
+    # blocks. Fail closed so a malformed corpus cannot train the second block
+    # as ordinary answer text.
+    mixed = {'messages': [{
+        'role': 'assistant',
+        'reasoning_content': 'FIELD',
+        'content': '<think>\nINLINE\n</think>\n\nanswer',
+    }]}
+    template.template_backend = 'swift'
+    with pytest.raises(ValueError, match='exactly one reasoning representation'):
+        template.encode(mixed)
 
 
 def test_qwen3_8_reasoning_effort():

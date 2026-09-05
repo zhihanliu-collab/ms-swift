@@ -694,6 +694,9 @@ class Qwen3_8Template(Qwen3_5Template):
                     content = ''
                 if not isinstance(content, str):
                     raise TypeError('Qwen3.8 assistant content must be a string when reasoning_content is provided.')
+                if content.lstrip().startswith('<think>'):
+                    raise ValueError('Qwen3.8 assistant message cannot provide both inline <think> content and '
+                                     'reasoning_content; choose exactly one reasoning representation.')
                 message['content'] = f'<think>\n{reasoning_content}\n</think>\n\n{content}'
         super()._swift_prepare_inputs(inputs)
 
