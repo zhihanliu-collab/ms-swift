@@ -1,5 +1,7 @@
 import unittest
 
+from datasets import Dataset
+
 from swift.dataset import (AnthropicMessagesPreprocessor, EncodePreprocessor, MessagesPreprocessor,
                            OpenAIMessagesPreprocessor, PackingDataset, load_dataset)
 from swift.model import get_processor
@@ -244,6 +246,36 @@ class TestRejectedMessagesPreprocess(unittest.TestCase):
 
 
 class TestProviderMessagesPreprocess(unittest.TestCase):
+
+    def test_dataset_loader_preserves_openai_reasoning_with_tool_call(self):
+        dataset = Dataset.from_list([{
+            'messages': [{
+                'role': 'user',
+                'content': 'Check the weather.',
+                'loss': False,
+            }, {
+                'role': 'assistant',
+                'reasoning_content': 'I need the weather tool.',
+                'content': '',
+                'tool_calls': [{
+                    'id': 'call_weather',
+                    'type': 'function',
+                    'function': {
+                        'name': 'get_weather',
+                        'arguments': '{"city":"Hangzhou"}',
+                    },
+                }],
+                'loss': True,
+            }],
+        }])
+        result = MessagesPreprocessor()(
+            dataset, num_proc=1, load_from_cache_file=False, strict=True)[0]
+        self.assertEqual(
+            [message['role'] for message in result['messages']],
+            ['user', 'assistant', 'tool_call'],
+        )
+        self.assertEqual(result['messages'][1]['reasoning_content'], 'I need the weather tool.')
+        self.assertTrue(result['messages'][1]['loss'])
 
     def test_openai_parallel_tool_calls(self):
         row = {

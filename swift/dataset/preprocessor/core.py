@@ -73,7 +73,12 @@ class RowPreprocessor:
         assert len(messages) > 0, f'messages: {messages}'
         # fix swift/SlimOrca (concat)
         for message in messages:
-            keys = set(message.keys()) - {'role', 'content', 'loss', 'loss_scale'}
+            # Qwen3.8's public API keeps chain-of-thought in a separate
+            # reasoning_content field.  OpenAI tool-call normalization keeps
+            # that field on the assistant message, so the dataset loader must
+            # not discard it before the Qwen3.8 template folds it into the
+            # native <think> wire.
+            keys = set(message.keys()) - {'role', 'content', 'reasoning_content', 'loss', 'loss_scale'}
             for key in keys:
                 message.pop(key)
 
@@ -275,6 +280,7 @@ class RowPreprocessor:
                     messages_feature_with_loss = [{
                         'role': Value(dtype='string'),
                         'content': Value(dtype='string'),
+                        'reasoning_content': Value(dtype='string'),
                         'loss': Value(dtype='bool'),
                         'loss_scale': Value(dtype='float64'),
                     }]
